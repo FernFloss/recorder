@@ -139,7 +139,7 @@ func (r *Record) startRecord() {
 			fmt.Println("Запись остановлена вручную, выходим из цикла.")
 			return
 		}
-		startTime := time.Now().Add(1 * time.Second)
+		startTime := time.Now().Add(-1 * time.Second)
 		filename := fmt.Sprintf("%s_%s_%s.mkv", r.Name, r.Type, startTime.Format("20060102_150405"))
 		fmt.Printf("Запуск GStreamer для %s по URL: %s, запись в файл: %s\n", r.Name, r.URL, filename)
 

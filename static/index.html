@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Конфигурация и мониторинг потоков</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <h1>Конфигурация и мониторинг потоков</h1>
+
+  <form id="configForm">
+    <label for="room">Название комнаты:</label>
+    <input type="text" id="room" name="room" required><br>
+
+    <label for="destination">Путь для сохранения (по умолчанию ./videos):</label>
+    <input type="text" id="destination" name="destination"><br>
+
+    <fieldset>
+      <legend>Видео потоки (до 5 потоков)</legend>
+      <div id="videoStreams"></div>
+      <button type="button" onclick="addStream('video')">Добавить видео поток</button>
+    </fieldset>
+
+    <fieldset>
+      <legend>Аудио поток (1 поток)</legend>
+      <div>
+        <label for="audio_name">Имя:</label>
+        <input type="text" id="audio_name">
+        <label for="audio_url">Аудио URL:</label>
+        <input type="text" id="audio_url" required oninput="validateStream(1, 'audio')">
+        <span class="error" id="audioError"></span>
+      </div>
+    </fieldset>
+
+    <button type="button" onclick="submitConfig()">Отправить конфигурацию</button>
+  </form>
+
+  <h2>Мониторинг потоков</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Название</th>
+        <th>URL</th>
+        <th>Статус</th>
+        <th>Ошибка</th>
+      </tr>
+    </thead>
+    <tbody id="statusTable"></tbody>
+  </table>
+
+  <h2>Управление записью</h2>
+  <button id="startButton">Запуск записи</button>
+  <button id="stopButton">Остановка записи</button>
+
+  <h2>Конфигурация</h2>
+  <button id="downloadFromFileButton">Загрузить конфигурацию на сервере из файла</button>
+  
+  <script src="script.js"></script>
+</body>
+</html>
+

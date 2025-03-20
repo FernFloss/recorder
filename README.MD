@@ -13,7 +13,7 @@ go mod tidy
 🔹 Возвращает список потоков с их состоянием и ошибками (если есть).
 
 Пример:
-
+```json
 {
   "records": [
     {
@@ -30,11 +30,14 @@ go mod tidy
     }
   ]
 }
+```
 
 ### POST /config
 
 Загружает новую конфигурацию потоков.
 Пример запроса: 
+
+```bash
 curl -X POST http://localhost:5000/config \
      -H "Content-Type: application/json" \
      -d '{
@@ -60,6 +63,7 @@ curl -X POST http://localhost:5000/config \
            ],
            "destination": "./videos"
          }'
+```
 
 ### GET /start
 

@@ -81,3 +81,11 @@ curl -X POST http://localhost:5000/config \
 
 Возвращает метрики о состоянии потоков.
 
+
+# Постобработка
+Для постобработки и синхронизации записанного материала необходимо запустить скрипт `editor.go`.
+
+```PowerShell
+go build editor.go
+./editor <InputDir> <OutputDir>
+```

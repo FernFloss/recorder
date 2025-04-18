@@ -12,6 +12,13 @@ import (
 	"time"
 )
 
+// Config содержит параметры обработки
+type Config struct {
+	InputFolder  string
+	OutputFolder string
+	Cleanup      bool // Флаг для очистки временных файлов
+}
+
 // StatusRecord описывает запись из JSON файла
 type StatusRecord struct {
 	Status    string `json:"status"`
@@ -89,29 +96,53 @@ func formatTimestampForFilename(t time.Time) string {
 	return t.Format("20060102_150405")
 }
 
-// generateGap создает заглушку для разрыва: для video – черный экран, для audio – тишина
-func generateGap(duration time.Duration, streamType, outputFolder, streamName string, gapIndex int) (string, error) {
-	gapFile := filepath.Join(outputFolder, fmt.Sprintf("%s_%s_gap_%d.mkv", streamName, streamType, gapIndex))
-	durationStr := fmt.Sprintf("%.3f", duration.Seconds())
+// getVideoResolution определяет разрешение видеофайла
+func getVideoResolution(filePath string) (width, height int, err error) {
+    cmd := exec.Command("ffprobe", "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=width,height", "-of", "csv=s=x:p=0", filePath)
+    out, err := cmd.CombinedOutput()
+    if err != nil {
+        return 0, 0, fmt.Errorf("ошибка определения разрешения: %v, вывод: %s", err, string(out))
+    }
 
-	var cmd *exec.Cmd
-	if streamType == "video" {
-		// Черный экран (разрешение можно менять по необходимости)
-		cmd = exec.Command("ffmpeg", "-y", "-f", "lavfi",
-			"-i", fmt.Sprintf("color=c=black:s=1280x720:d=%s", durationStr),
-			"-c:v", "libx264", gapFile)
-	} else {
-		// Тишина
-		cmd = exec.Command("ffmpeg", "-y", "-f", "lavfi",
-			"-i", "anullsrc=r=48000:cl=stereo", "-t", durationStr,
-			"-c:a", "aac", gapFile)
-	}
+    res := strings.TrimSpace(string(out))
+    if n, err := fmt.Sscanf(res, "%dx%d", &width, &height); n != 2 || err != nil {
+        return 0, 0, fmt.Errorf("не удалось распарсить разрешение: %s", res)
+    }
 
-	fmt.Printf("[DEBUG] Генерация заглушки: %s (длительность: %s)\n", gapFile, durationStr)
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("ошибка создания заглушки: %v", err)
-	}
-	return gapFile, nil
+    return width, height, nil
+}
+
+// generateGap создает заглушку для разрыва с учетом разрешения видео
+func generateGap(duration time.Duration, streamType, outputFolder, streamName string, gapIndex int, refVideoFile string) (string, error) {
+    gapFile := filepath.Join(outputFolder, fmt.Sprintf("%s_%s_gap_%d.mkv", streamName, streamType, gapIndex))
+    durationStr := fmt.Sprintf("%.3f", duration.Seconds())
+
+    var cmd *exec.Cmd
+    if streamType == "video" {
+        // Получаем разрешение из эталонного видеофайла
+        width, height, err := getVideoResolution(refVideoFile)
+        if err != nil {
+            fmt.Printf("[WARN] Не удалось определить разрешение для %s, используем 1280x720: %v\n", refVideoFile, err)
+            width, height = 1280, 720 // Значения по умолчанию
+        }
+        
+        // Черный экран с разрешением как у исходного видео
+        cmd = exec.Command("ffmpeg", "-y", "-f", "lavfi",
+            "-i", fmt.Sprintf("color=c=black:s=%dx%d:d=%s", width, height, durationStr),
+            "-c:v", "libx264", gapFile)
+    } else {
+        // Тишина
+        cmd = exec.Command("ffmpeg", "-y", "-f", "lavfi",
+            "-i", "anullsrc=r=48000:cl=stereo", "-t", durationStr,
+            "-c:a", "aac", gapFile)
+    }
+
+    fmt.Printf("[DEBUG] Генерация заглушки: %s (длительность: %s)\n", gapFile, durationStr)
+    if err := cmd.Run(); err != nil {
+        return "", fmt.Errorf("ошибка создания заглушки: %v", err)
+    }
+    return gapFile, nil
 }
 
 // computeGlobalBoundsAll сканирует все JSON-файлы (video и audio) и вычисляет глобальный старт и стоп
@@ -288,7 +319,7 @@ func processStream(streamName, streamType, inputFolder, outputFolder string, glo
 		if gapDur >= time.Millisecond {
 			fmt.Printf("[INFO] Начало потока (%s) позже глобального старта (%s), вставка заглушки длительностью %s\n",
 				segments[0].Start.Format(time.RFC3339Nano), globalStart.Format(time.RFC3339Nano), gapDur)
-			gapFile, err := generateGap(gapDur, streamType, outputFolder, streamName, gapIndex)
+				gapFile, err := generateGap(gapDur, streamType, outputFolder, streamName, gapIndex, segments[0].File)
 			if err != nil {
 				return err
 			}
@@ -323,7 +354,7 @@ func processStream(streamName, streamType, inputFolder, outputFolder string, glo
 			gapsFile.WriteString(gapInfo)
 			// Если длительность разрыва меньше миллисекунды, пропускаем генерацию заглушки
 			if gapDur >= time.Millisecond {
-				gapFile, err := generateGap(gapDur, streamType, outputFolder, streamName, gapIndex)
+				gapFile, err := generateGap(gapDur, streamType, outputFolder, streamName, gapIndex, current.File)
 				if err != nil {
 					return err
 				}
@@ -350,7 +381,7 @@ func processStream(streamName, streamType, inputFolder, outputFolder string, glo
 		if gapDur >= time.Millisecond {
 			fmt.Printf("[INFO] Конец потока (%s) раньше глобального стопа (%s), вставка заглушки длительностью %s\n",
 				last.Stop.Format(time.RFC3339Nano), globalStop.Format(time.RFC3339Nano), gapDur)
-			gapFile, err := generateGap(gapDur, streamType, outputFolder, streamName, gapIndex)
+			gapFile, err := generateGap(gapDur, streamType, outputFolder, streamName, gapIndex, last.File)
 			if err != nil {
 				return err
 			}
@@ -417,88 +448,112 @@ func mergeAudioToVideo(videoFile, audioFile, mergedFile string) error {
 	return cmd.Run()
 }
 
-func main() {
-	if len(os.Args) < 3 {
-		fmt.Println("Использование: script <input_folder> <output_folder>")
-		os.Exit(1)
-	}
-	inputFolder := os.Args[1]
-	outputFolder := os.Args[2]
+// ProcessVideo реализует основную логику обработки
+func ProcessVideo(cfg Config) error {
+	fmt.Printf("[INFO] Запуск обработки. Входная папка: %s, Выходная папка: %s\n", cfg.InputFolder, cfg.OutputFolder)
 
 	// Создаем папку для результатов, если ее нет
-	if err := os.MkdirAll(outputFolder, 0755); err != nil {
-		fmt.Printf("[ERROR] Не удалось создать папку для результатов: %v\n", err)
-		os.Exit(1)
+	if err := os.MkdirAll(cfg.OutputFolder, 0755); err != nil {
+		return fmt.Errorf("не удалось создать папку для результатов: %v", err)
 	}
 
-	fmt.Printf("[INFO] Запуск обработки. Входная папка: %s, Выходная папка: %s\n", inputFolder, outputFolder)
-
-	files, err := ioutil.ReadDir(inputFolder)
+	files, err := ioutil.ReadDir(cfg.InputFolder)
 	if err != nil {
-		fmt.Printf("[ERROR] Ошибка чтения каталога %s: %v\n", inputFolder, err)
-		os.Exit(1)
+		return fmt.Errorf("ошибка чтения каталога %s: %v", cfg.InputFolder, err)
 	}
 
-	// Вычисляем глобальный старт и глобальный стоп среди всех потоков
-	globalStart, globalStop, err := computeGlobalBoundsAll(inputFolder)
+	// Вычисляем глобальные границы
+	globalStart, globalStop, err := computeGlobalBoundsAll(cfg.InputFolder)
 	if err != nil {
-		fmt.Printf("[WARN] Не удалось вычислить глобальные границы: %v\n", err)
-	} else {
-		fmt.Printf("[INFO] Глобальный старт: %s\n", globalStart.Format(time.RFC3339Nano))
-		fmt.Printf("[INFO] Глобальный стоп: %s\n", globalStop.Format(time.RFC3339Nano))
+		return fmt.Errorf("не удалось вычислить глобальные границы: %v", err)
 	}
+	fmt.Printf("[INFO] Глобальный старт: %s\n", globalStart.Format(time.RFC3339Nano))
+	fmt.Printf("[INFO] Глобальный стоп: %s\n", globalStop.Format(time.RFC3339Nano))
 
-	// Перебираем ВСЕ существующие JSON-файлы
+	// Обработка всех потоков
 	for _, file := range files {
 		if file.IsDir() {
 			continue
 		}
 		name := file.Name()
 
-		// Проверяем, является ли файл статусным JSON для video или audio
 		if strings.HasSuffix(name, "__video__status.json") {
 			streamName := strings.Split(name, "__")[0]
 			fmt.Printf("[INFO] Обнаружен JSON видео: %s (поток: %s)\n", name, streamName)
-			_ = processStream(streamName, "video", inputFolder, outputFolder, globalStart, globalStop)
+			if err := processStream(streamName, "video", cfg.InputFolder, cfg.OutputFolder, globalStart, globalStop); err != nil {
+				return fmt.Errorf("ошибка обработки видео потока %s: %v", streamName, err)
+			}
 		} else if strings.HasSuffix(name, "__audio__status.json") {
 			streamName := strings.Split(name, "__")[0]
 			fmt.Printf("[INFO] Обнаружен JSON аудио: %s (поток: %s)\n", name, streamName)
-			_ = processStream(streamName, "audio", inputFolder, outputFolder, globalStart, globalStop)
+			if err := processStream(streamName, "audio", cfg.InputFolder, cfg.OutputFolder, globalStart, globalStop); err != nil {
+				return fmt.Errorf("ошибка обработки аудио потока %s: %v", streamName, err)
+			}
 		}
 	}
 
-	// Если обнаружен итоговый аудиофайл, накладываем его на все итоговые видео
+	// Наложение аудио на видео
+	if err := mergeAllAudioVideo(cfg.OutputFolder); err != nil {
+		return fmt.Errorf("ошибка наложения аудио: %v", err)
+	}
+
+	// Очистка временных файлов (если включено)
+	if cfg.Cleanup {
+		if err := cleanupTempFiles(cfg.OutputFolder); err != nil {
+			fmt.Printf("[WARN] Ошибка очистки временных файлов: %v\n", err)
+		}
+	}
+
+	return nil
+}
+
+// mergeAllAudioVideo объединяет все аудио и видео файлы
+func mergeAllAudioVideo(outputFolder string) error {
 	var audioFinal string
-	files, _ = ioutil.ReadDir(outputFolder)
+	files, err := ioutil.ReadDir(outputFolder)
+	if err != nil {
+		return err
+	}
+
+	// Поиск финального аудиофайла
 	for _, f := range files {
 		if strings.HasSuffix(f.Name(), "_audio_final.mkv") {
 			audioFinal = filepath.Join(outputFolder, f.Name())
 			break
 		}
 	}
-	if audioFinal != "" {
-		fmt.Printf("[INFO] Найден итоговый аудиофайл: %s\n", audioFinal)
-		// Для каждого итогового видео накладываем аудио
-		for _, f := range files {
-			if strings.HasSuffix(f.Name(), "_video_final.mkv") {
-				videoFile := filepath.Join(outputFolder, f.Name())
-				mergedFile := strings.Replace(videoFile, "_video_final.mkv", "_final.mkv", 1)
-				if err := mergeAudioToVideo(videoFile, audioFinal, mergedFile); err != nil {
-					fmt.Printf("[ERROR] Ошибка наложения аудио на видео %s: %v\n", videoFile, err)
-					continue
-				}
-				// Удаляем исходное видео без аудио
-				os.Remove(videoFile)
-				fmt.Printf("[INFO] Финальный файл с аудио: %s\n", mergedFile)
-			}
-		}
-		// Удаляем итоговый аудиофайл, чтобы в result остались только финальные видео
-		os.Remove(audioFinal)
-	} else {
-		fmt.Println("[WARN] Итоговый аудиофайл не найден, накладывать аудио не удалось")
+
+	if audioFinal == "" {
+		return fmt.Errorf("итоговый аудиофайл не найден")
 	}
 
-	// Удаляем временные файлы
+	// Наложение аудио на все видеофайлы
+	for _, f := range files {
+		if strings.HasSuffix(f.Name(), "_video_final.mkv") {
+			videoFile := filepath.Join(outputFolder, f.Name())
+			mergedFile := strings.Replace(videoFile, "_video_final.mkv", "_final.mkv", 1)
+			
+			if err := mergeAudioToVideo(videoFile, audioFinal, mergedFile); err != nil {
+				return fmt.Errorf("ошибка наложения аудио на %s: %v", videoFile, err)
+			}
+			
+			if err := os.Remove(videoFile); err != nil {
+				fmt.Printf("[WARN] Не удалось удалить временный видеофайл %s: %v\n", videoFile, err)
+			}
+			fmt.Printf("[INFO] Финальный файл с аудио: %s\n", mergedFile)
+		}
+	}
+
+	// Удаление временного аудиофайла
+	if err := os.Remove(audioFinal); err != nil {
+		fmt.Printf("[WARN] Не удалось удалить временный аудиофайл %s: %v\n", audioFinal, err)
+	}
+	
+	return nil
+}
+
+// cleanupTempFiles очищает временные файлы
+func cleanupTempFiles(outputFolder string) error {
 	patterns := []string{
 		"gaps_*_video.txt",
 		"*_video_list.txt",
@@ -507,20 +562,65 @@ func main() {
 		"*_video_gap_*.mkv",
 		"*_audio_gap_*.mkv",
 	}
+
 	for _, pattern := range patterns {
 		fullPattern := filepath.Join(outputFolder, pattern)
 		files, err := filepath.Glob(fullPattern)
 		if err != nil {
-			fmt.Printf("Ошибка поиска по шаблону %s: %v\n", fullPattern, err)
-			continue
+			return fmt.Errorf("ошибка поиска по шаблону %s: %v", fullPattern, err)
 		}
 		for _, f := range files {
 			if err := os.Remove(f); err != nil {
-				fmt.Printf("Ошибка удаления файла %s: %v\n", f, err)
-			} else {
-				fmt.Printf("[INFO] Удален временный файл: %s\n", f)
+				return fmt.Errorf("ошибка удаления файла %s: %v", f, err)
 			}
+			fmt.Printf("[INFO] Удален временный файл: %s\n", f)
 		}
 	}
-	
+	return nil
+}
+
+func main() {
+	// Парсинг аргументов командной строки
+	if len(os.Args) < 2 {
+		fmt.Println("Использование:")
+		fmt.Println("  script <input_folder> [output_folder] [--cleanup]")
+		fmt.Println("Параметры:")
+		fmt.Println("  input_folder  - обязательный, папка с исходными файлами")
+		fmt.Println("  output_folder - опциональный, папка для результатов (по умолчанию <input_folder>-result)")
+		fmt.Println("  --cleanup     - опционально, удалять временные файлы после обработки")
+		os.Exit(1)
+	}
+
+	cfg := Config{
+		InputFolder: os.Args[1],
+		Cleanup:     false,
+	}
+
+	// Определение выходной папки
+	if len(os.Args) >= 3 && !strings.HasPrefix(os.Args[2], "--") {
+		cfg.OutputFolder = os.Args[2]
+	} else {
+		absInput, err := filepath.Abs(cfg.InputFolder)
+		if err != nil {
+			fmt.Printf("[ERROR] Не удалось получить абсолютный путь входной папки: %v\n", err)
+			os.Exit(1)
+		}
+		cfg.OutputFolder = absInput + "-result"
+	}
+
+	// Проверка флага очистки
+	for _, arg := range os.Args {
+		if arg == "--cleanup" {
+			cfg.Cleanup = true
+			break
+		}
+	}
+
+	// Запуск обработки
+	if err := ProcessVideo(cfg); err != nil {
+		fmt.Printf("[ERROR] Ошибка обработки видео: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("[INFO] Обработка успешно завершена")
 }

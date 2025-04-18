@@ -139,38 +139,43 @@ func computeGlobalBoundsAll(inputFolder string) (time.Time, time.Time, error) {
 			if err := json.Unmarshal(data, &records); err != nil {
 				continue
 			}
-			// Определяем имя потока и тип (video или audio)
+			// Определяем имя потока
 			parts := strings.Split(name, "__")
 			if len(parts) < 2 {
 				continue
 			}
 			streamName := parts[0]
-			var streamType string
-			if strings.Contains(name, "video") {
-				streamType = "video"
-			} else if strings.Contains(name, "audio") {
-				streamType = "audio"
-			} else {
-				continue
-			}
+
 			// Для каждой записи с "started"
 			for _, rec := range records {
-				if rec.Status != "started" {
+				// Проверяем, начинается ли статус с "started_"
+				if !strings.HasPrefix(rec.Status, "started_") {
 					continue
 				}
+			
+				// Извлекаем имя файла из статуса
+				fileName := strings.TrimPrefix(rec.Status, "started_")
+			
+				// Парсим временную метку
 				t, err := parseTimestamp(rec.Timestamp)
 				if err != nil {
 					continue
 				}
-				// Формируем имя файла фрагмента: <streamName>_<streamType>_<timestamp>.mkv
-				fileName := fmt.Sprintf("%s_%s_%s.mkv", streamName, streamType, formatTimestampForFilename(t))
+			
+				// Формируем путь до файла (внутри папки потока)
 				filePath := filepath.Join(inputFolder, streamName, fileName)
+			
+				// Получаем длительность видео
 				dur, err := getDuration(filePath)
 				if err != nil {
 					fmt.Printf("[WARN] Не удалось получить длительность для файла %s: %v\n", filePath, err)
 					continue
 				}
+			
+				// Вычисляем время окончания
 				stopTime := t.Add(dur)
+			
+				// Обновляем глобальные значения начала и конца
 				if first {
 					globalStart = t
 					globalStop = stopTime
@@ -215,29 +220,39 @@ func processStream(streamName, streamType, inputFolder, outputFolder string, glo
 
 	var segments []Segment
 	streamFolder := filepath.Join(inputFolder, streamName)
+
 	for _, rec := range records {
-		if rec.Status != "started" {
+		// Проверка, начинается ли статус с "started_"
+		if !strings.HasPrefix(rec.Status, "started_") {
 			continue
 		}
+	
+		// Извлекаем имя файла из статуса
+		fileName := strings.TrimPrefix(rec.Status, "started_")
+		filePath := filepath.Join(streamFolder, fileName)
+		fmt.Printf("[DEBUG] Ожидаемый файл: %s\n", filePath)
+	
+		// Парсинг времени старта
 		startTime, err := parseTimestamp(rec.Timestamp)
 		if err != nil {
 			fmt.Printf("[ERROR] Ошибка парсинга timestamp %s: %v\n", rec.Timestamp, err)
 			continue
 		}
-		fileName := fmt.Sprintf("%s_%s_%s.mkv", streamName, streamType, formatTimestampForFilename(startTime))
-		filePath := filepath.Join(streamFolder, fileName)
-		fmt.Printf("[DEBUG] Ожидаемый файл: %s\n", filePath)
-
+	
+		// Получение длительности видеофрагмента
 		dur, err := getDuration(filePath)
 		if err != nil {
 			fmt.Printf("[ERROR] Ошибка получения длительности файла %s: %v\n", filePath, err)
 			continue
 		}
-
+	
+		// Вычисляем время окончания
 		stopTime := startTime.Add(dur)
+	
 		fmt.Printf("[DEBUG] Сегмент: Start=%s, Stop=%s, Duration=%s, File=%s\n",
 			startTime.Format(time.RFC3339Nano), stopTime.Format(time.RFC3339Nano), dur, filePath)
-
+	
+		// Добавляем сегмент в список
 		segments = append(segments, Segment{
 			Start:    startTime,
 			Stop:     stopTime,
@@ -409,6 +424,12 @@ func main() {
 	}
 	inputFolder := os.Args[1]
 	outputFolder := os.Args[2]
+
+	// Создаем папку для результатов, если ее нет
+	if err := os.MkdirAll(outputFolder, 0755); err != nil {
+		fmt.Printf("[ERROR] Не удалось создать папку для результатов: %v\n", err)
+		os.Exit(1)
+	}
 
 	fmt.Printf("[INFO] Запуск обработки. Входная папка: %s, Выходная папка: %s\n", inputFolder, outputFolder)
 

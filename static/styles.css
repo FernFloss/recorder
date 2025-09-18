@@ -1,0 +1,40 @@
+body {
+    font-family: Arial, sans-serif;
+  }
+  
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 20px;
+  }
+  
+  th, td {
+    padding: 8px;
+    border: 1px solid #ddd;
+    text-align: left;
+  }
+  
+  th {
+    background-color: #f4f4f4;
+  }
+  
+  .status-on {
+    color: green;
+    font-weight: bold;
+  }
+  
+  .status-off {
+    color: gray;
+    font-weight: bold;
+  }
+  
+  .status-error {
+    color: red;
+    font-weight: bold;
+  }
+  
+
+  .long-input {
+    width: 80%;  /* Увеличенная ширина поля */
+    max-width: 600px; /* Максимальная ширина */
+}

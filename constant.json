@@ -1,0 +1,5 @@
+{
+    "Gstreamer_path": "gst-launch-1.0",
+    "RetryDelay": "5",
+    "Port":8080
+}
